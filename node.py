@@ -351,22 +351,6 @@ class GroundingDinoSAMSegment:
         return (torch.cat(res_images, dim=0), torch.cat(res_masks, dim=0))
 
 
-class InvertMask:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "mask": ("MASK",),
-            }
-        }
-    CATEGORY = "Segment Anything"
-    FUNCTION = "main"
-    RETURN_TYPES = ("MASK",)
-
-    def main(self, mask):
-        out = 1.0 - mask
-        return (out,)
-
 class IsMaskEmptyNode:
     @classmethod
     def INPUT_TYPES(s):
