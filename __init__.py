@@ -2,13 +2,11 @@ from .node import *
 from .install import *
 
 NODE_CLASS_MAPPINGS = {
-    'SAMModelLoader (segment anything)': SAMModelLoader,
-    'GroundingDinoModelLoader (segment anything)': GroundingDinoModelLoader,
-    'GroundingDinoSAMSegment (segment anything)': GroundingDinoSAMSegment,
+    "SAM Model Loader (Segment Anything)": SAMModelLoader,
+    "Grounding DINO Model Loader": GroundingDinoModelLoader,
+    "Grounding DINO SAM Segment": GroundingDinoSAMSegment,
     'InvertMask (segment anything)': InvertMask,
-    "IsMaskEmpty": IsMaskEmptyNode,
+    "Is Mask Empty?": IsMaskEmptyNode,
 }
 
-__all__ = ['NODE_CLASS_MAPPINGS']
-
-
+__all__ = ["NODE_CLASS_MAPPINGS"]
