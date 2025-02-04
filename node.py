@@ -265,49 +265,11 @@ def sam_segment(
     return create_tensor_output(image_np, masks, boxes)
 
 
-class SAMModelLoader:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model_name": (list_sam_model(), ),
-                "global_cache": ('BOOLEAN', {"default": True}),
-            }
-        }
-    CATEGORY = "Segment Anything"
-    FUNCTION = "main"
-    RETURN_TYPES = ("SAM_MODEL", )
-
-    def main(self, model_name, global_cache):
-        sam_model = load_sam_model(model_name, cache=global_cache)
-        return (sam_model, )
-
-
-class GroundingDinoModelLoader:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model_name": (list_groundingdino_model(), ),
-                "global_cache": ('BOOLEAN', {"default": True})
-            }
-        }
-    CATEGORY = "Segment Anything"
-    FUNCTION = "main"
-    RETURN_TYPES = ("GROUNDING_DINO_MODEL", )
-
-    def main(self, model_name, global_cache):
-        dino_model = load_groundingdino_model(model_name, cache=global_cache)
-        return (dino_model, )
-
-
 class GroundingDinoSAMSegment:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "sam_model": ('SAM_MODEL', {}),
-                "grounding_dino_model": ('GROUNDING_DINO_MODEL', {}),
                 "image": ('IMAGE', {}),
                 "prompt": ("STRING", {}),
                 "threshold": ("FLOAT", {
@@ -316,20 +278,33 @@ class GroundingDinoSAMSegment:
                     "max": 1.0,
                     "step": 0.01
                 }),
+                "sam_model": (list_sam_model(), ),
+                "grounding_dino_model": (list_groundingdino_model(), ),
+                "global_cache": ('BOOLEAN', {"default": True}),
+                "keep_models_loaded": ("BOOLEAN", {"default": True}),
             }
         }
     CATEGORY = "Segment Anything"
     FUNCTION = "main"
     RETURN_TYPES = ("IMAGE", "MASK")
 
-    def main(self, grounding_dino_model, sam_model, image, prompt, threshold):
+
+    def main(self, image, prompt, threshold, sam_model, grounding_dino_model, global_cache, keep_models_loaded):
+        def sam_model_loader(model_name, global_cache):
+            sam_model = load_sam_model(model_name, cache=global_cache)
+            return (sam_model)
+
+        def groundingdino_model_loader(model_name, global_cache):
+            dino_model = load_groundingdino_model(model_name, cache=global_cache)
+            return (dino_model)
+
         res_images = []
         res_masks = []
         for item in image:
             item = Image.fromarray(
                 np.clip(255. * item.cpu().numpy(), 0, 255).astype(np.uint8)).convert('RGBA')
             boxes = groundingdino_predict(
-                grounding_dino_model,
+                groundingdino_model_loader(grounding_dino_model, global_cache),
                 item,
                 prompt,
                 threshold
@@ -337,7 +312,7 @@ class GroundingDinoSAMSegment:
             if boxes.shape[0] == 0:
                 break
             (images, masks) = sam_segment(
-                sam_model,
+                sam_model_loader(sam_model, global_cache),
                 item,
                 boxes
             )
@@ -348,6 +323,12 @@ class GroundingDinoSAMSegment:
             empty_images = torch.zeros((1, height, width,3), dtype=torch.float32, device="cpu")
             empty_masks = torch.zeros((1, height, width), dtype=torch.float32, device="cpu")
             return (empty_images, empty_masks)
+        if not keep_models_loaded:
+            offload_device = comfy.model_management.unet_offload_device()
+            print("Offloading models...")
+            groundingdino_model_loader(grounding_dino_model, global_cache).to(offload_device)
+            sam_model_loader(sam_model, global_cache).to(offload_device)
+            comfy.model_management.soft_empty_cache()
         return (torch.cat(res_images, dim=0), torch.cat(res_masks, dim=0))
 
 
