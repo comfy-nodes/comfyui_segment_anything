@@ -74,7 +74,7 @@ def list_sam_model():
     return list(sam_model_list.keys())
 
 
-def load_sam_model(model_name, cache=True):
+def load_sam_model(model_name, cache=True, device="cuda"):
     global model_cache
     sam = model_cache.get(model_name, None)
     if sam is None:
@@ -88,8 +88,7 @@ def load_sam_model(model_name, cache=True):
         sam.model_name = model_file_name
         if cache:
             model_cache[model_name] = sam
-    sam_device = comfy.model_management.get_torch_device()
-    sam.to(device=sam_device)
+    sam.to(device=device)
     sam.eval()
     return sam
 
@@ -115,7 +114,7 @@ def get_local_filepath(url, dirname, local_file_name=None):
     return destination
 
 
-def load_groundingdino_model(model_name, cache=True):
+def load_groundingdino_model(model_name, cache=True, device="cuda"):
     from local_groundingdino.datasets import transforms as T
     from local_groundingdino.util.utils import clean_state_dict as local_groundingdino_clean_state_dict
     from local_groundingdino.util.slconfig import SLConfig as local_groundingdino_SLConfig
@@ -143,7 +142,6 @@ def load_groundingdino_model(model_name, cache=True):
             checkpoint['model']), strict=False)
         if cache:
             model_cache[model_name] = dino
-    device = comfy.model_management.get_torch_device()
     dino.to(device=device)
     dino.eval()
     return dino
@@ -157,7 +155,8 @@ def groundingdino_predict(
     dino_model,
     image,
     prompt,
-    threshold
+    threshold,
+    device="cuda"
 ):
     def load_dino_image(image_pil):
         from local_groundingdino.datasets import transforms as T
@@ -169,14 +168,13 @@ def groundingdino_predict(
             ]
         )
         image, _ = transform(image_pil, None)  # 3, h, w
-        return image
+        return image.to(device)
 
-    def get_grounding_output(model, image, caption, box_threshold):
+    def get_grounding_output(model, image, caption, box_threshold, device):
         caption = caption.lower()
         caption = caption.strip()
         if not caption.endswith("."):
             caption = caption + "."
-        device = comfy.model_management.get_torch_device()
         image = image.to(device)
         with torch.no_grad():
             outputs = model(image[None], captions=[caption])
@@ -188,15 +186,15 @@ def groundingdino_predict(
         filt_mask = logits_filt.max(dim=1)[0] > box_threshold
         logits_filt = logits_filt[filt_mask]  # num_filt, 256
         boxes_filt = boxes_filt[filt_mask]  # num_filt, 4
-        return boxes_filt.cpu()
+        return boxes_filt.to(device)
 
     dino_image = load_dino_image(image.convert("RGB"))
     boxes_filt = get_grounding_output(
-        dino_model, dino_image, prompt, threshold
+        dino_model, dino_image, prompt, threshold, device
     )
     H, W = image.size[1], image.size[0]
     for i in range(boxes_filt.size(0)):
-        boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
+        boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H]).to(device)
         boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
         boxes_filt[i][2:] += boxes_filt[i][:2]
     return boxes_filt
@@ -215,7 +213,7 @@ def create_pil_output(image_np, masks, boxes_filt):
 
 def create_tensor_output(image_np, masks, boxes_filt):
     output_masks, output_images = [], []
-    boxes_filt = boxes_filt.numpy().astype(int) if boxes_filt is not None else None
+    boxes_filt = boxes_filt.cpu().numpy().astype(int) if boxes_filt is not None else None
     for mask in masks:
         image_np_copy = copy.deepcopy(image_np)
         image_np_copy[~np.any(mask, axis=0)] = np.array([0, 0, 0, 0])
@@ -241,7 +239,8 @@ def split_image_mask(image):
 def sam_segment(
     sam_model,
     image,
-    boxes
+    boxes,
+    device="cuda"
 ):
     if boxes.shape[0] == 0:
         return None
@@ -255,13 +254,12 @@ def sam_segment(
     predictor.set_image(image_np_rgb)
     transformed_boxes = predictor.transform.apply_boxes_torch(
         boxes, image_np.shape[:2])
-    sam_device = comfy.model_management.get_torch_device()
     masks, _, _ = predictor.predict_torch(
         point_coords=None,
         point_labels=None,
-        boxes=transformed_boxes.to(sam_device),
+        boxes=transformed_boxes.to(device),
         multimask_output=False)
-    masks = masks.permute(1, 0, 2, 3).cpu().numpy()
+    masks = masks.permute(1, 0, 2, 3).cpu().numpy()  # Move to CPU before converting to numpy
     return create_tensor_output(image_np, masks, boxes)
 
 
@@ -280,6 +278,13 @@ class GroundingDinoSAMSegment:
                 }),
                 "sam_model": (list_sam_model(), ),
                 "grounding_dino_model": (list_groundingdino_model(), ),
+                "device_mode": (["Auto", "Prefer GPU", "CPU"],
+                    {
+                        "tooltip": "Auto: Only applicable when a GPU is available. It temporarily loads models into VRAM only when the detection function is used.\n"
+                        "Prefer GPU: Tries to keep models on the GPU whenever possible. This can be used when there is sufficient VRAM available.\n"
+                        "CPU: Always loads only on the CPU."
+                    },
+                ),
                 "global_cache": ('BOOLEAN', {"default": True}),
                 "keep_models_loaded": ("BOOLEAN", {"default": True}),
             }
@@ -289,14 +294,21 @@ class GroundingDinoSAMSegment:
     RETURN_TYPES = ("IMAGE", "MASK")
 
 
-    def main(self, image, prompt, threshold, sam_model, grounding_dino_model, global_cache, keep_models_loaded):
+    def main(self, image, prompt, threshold, sam_model, grounding_dino_model, device_mode, global_cache, keep_models_loaded):
+        if device_mode == "Prefer GPU" and torch.cuda.is_available():
+            device = "cuda"
+        elif device_mode == "CPU":
+            device = "cpu"
+        else:  # "Auto" mode: Use GPU if available, else fallback to CPU
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
         def sam_model_loader(model_name, global_cache):
-            sam_model = load_sam_model(model_name, cache=global_cache)
-            return (sam_model)
+            sam_model = load_sam_model(model_name, cache=global_cache, device=device)
+            return sam_model
 
         def groundingdino_model_loader(model_name, global_cache):
-            dino_model = load_groundingdino_model(model_name, cache=global_cache)
-            return (dino_model)
+            dino_model = load_groundingdino_model(model_name, cache=global_cache, device=device)
+            return dino_model
 
         res_images = []
         res_masks = []
@@ -307,20 +319,22 @@ class GroundingDinoSAMSegment:
                 groundingdino_model_loader(grounding_dino_model, global_cache),
                 item,
                 prompt,
-                threshold
+                threshold,
+                device
             )
             if boxes.shape[0] == 0:
                 break
             (images, masks) = sam_segment(
                 sam_model_loader(sam_model, global_cache),
                 item,
-                boxes
+                boxes,
+                device
             )
             res_images.extend(images)
             res_masks.extend(masks)
         if len(res_images) == 0:
             _, height, width, _ = image.size()
-            empty_images = torch.zeros((1, height, width,3), dtype=torch.float32, device="cpu")
+            empty_images = torch.zeros((1, height, width, 3), dtype=torch.float32, device="cpu")
             empty_masks = torch.zeros((1, height, width), dtype=torch.float32, device="cpu")
             return (empty_images, empty_masks)
         if not keep_models_loaded:
