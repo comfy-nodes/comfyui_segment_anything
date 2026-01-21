@@ -276,7 +276,7 @@ class GroundingDinoSAMSegment:
                     "max": 1.0,
                     "step": 0.01
                 }),
-                "sam_model": (list_sam_model(), ),
+                "sam_model": (list_sam_model(), {"default": "sam_vit_b (375MB)"}, ),
                 "grounding_dino_model": (list_groundingdino_model(), ),
                 "device_mode": (["Auto", "Prefer GPU", "CPU"],
                     {
