@@ -100,7 +100,7 @@ def get_local_filepath(url, dirname, local_file_name=None):
 
     destination = folder_paths.get_full_path(dirname, local_file_name)
     if destination:
-        logger.warn(f'using extra model: {destination}')
+        logging.info(f'Using extra model: {destination}')
         return destination
 
     folder = os.path.join(folder_paths.models_dir, dirname)
@@ -109,7 +109,7 @@ def get_local_filepath(url, dirname, local_file_name=None):
 
     destination = os.path.join(folder, local_file_name)
     if not os.path.exists(destination):
-        logger.warn(f'downloading {url} to {destination}')
+        logging.info(f'Downloading {url} to {destination}')
         download_url_to_file(url, destination)
     return destination
 
