@@ -115,7 +115,6 @@ def get_local_filepath(url, dirname, local_file_name=None):
 
 
 def load_groundingdino_model(model_name, cache=True, device="cuda"):
-    from local_groundingdino.datasets import transforms as T
     from local_groundingdino.util.utils import clean_state_dict as local_groundingdino_clean_state_dict
     from local_groundingdino.util.slconfig import SLConfig as local_groundingdino_SLConfig
     from local_groundingdino.models import build_model as local_groundingdino_build_model
